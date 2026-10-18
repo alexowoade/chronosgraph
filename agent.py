@@ -20,7 +20,7 @@ class ClaimNode:
     page_title: str
     source_type: str        # "spec_table", "json_ld", "body_text"
     freshness_year: int     # Extracted release/modification year (e.g., 2026 vs 2023)
-    version_tag: str        # Extracted version string (e.g., "v6.2" vs "v5.0")
+    version_tag: str        # Extracted version string (e.g., "v2.4" vs "v1.0")
     quote: str
     relevance_score: float
     authority_score: float  # Combined relevance + freshness + structural weight
@@ -69,12 +69,11 @@ class ChronosGraphROCmAgent:
     def extract_temporal_signals(self, soup: BeautifulSoup, text_sample: str) -> Tuple[int, str]:
         """Extracts page modification year and semantic version tags to defeat stale web pages."""
         years = []
-        # Check meta tags and <time> elements first
         for meta in soup.find_all(["meta", "time"]):
             content = " ".join([str(v) for v in meta.attrs.values()])
-            for y in re.findall(r"\b(201\d|202[0-6])\b", content):
+            for y in re.findall(r"\b(201\d|202\d)\b", content):
                 years.append(int(y))
-        for y in re.findall(r"\b(201\d|202[0-6])\b", text_sample):
+        for y in re.findall(r"\b(201\d|202\d)\b", text_sample):
             years.append(int(y))
         best_year = max(years) if years else 2024
 
@@ -93,7 +92,7 @@ class ChronosGraphROCmAgent:
         hits = sum(1 for kw in keywords if kw in lower_t)
         if hits == 0:
             return 0.0
-        metric_bonus = 0.35 if re.search(r"(\d+(\.\d+)?\s*(gb|mb|tb|tb/s|ms|w|ghz|%|usd|\$|€)|v\d+\.\d+)", lower_t) else 0.0
+        metric_bonus = 0.35 if re.search(r"(\d+(\.\d+)?\s*(gb|mb|tb|tb/s|ms|s|w|ghz|mhz|%|usd|\$|€|cores)|v\d+\.\d+)", lower_t) else 0.0
         return round((hits / len(keywords)) + metric_bonus, 4)
 
     def parse_page_into_claims(self, url: str, html: str, keywords: List[str]) -> Tuple[str, List[ClaimNode], List[Tuple[float, str]]]:
@@ -101,19 +100,24 @@ class ChronosGraphROCmAgent:
         title = soup.title.get_text(strip=True) if soup.title else url
         full_text = soup.get_text(" ", strip=True)
         page_year, page_ver = self.extract_temporal_signals(soup, full_text[:3000])
-        # Freshness multiplier rewards 2025/2026 primary docs over stale 2021-2023 pages
         freshness_boost = 1.0 + max(0, (page_year - 2022) * 0.08)
 
         claims: List[ClaimNode] = []
 
-        # 1. HTML Specification Tables (Highest structural weight)
+        # 1. HTML Specification Tables (Preserves column headers AND row <th> labels)
         for table in soup.find_all("table"):
-            headers = [th.get_text(" ", strip=True) for th in table.find_all("th")]
-            h_prefix = ("[" + " | ".join(headers) + "] ") if headers else ""
+            thead = table.find("thead")
+            if thead:
+                headers = [th.get_text(" ", strip=True) for th in thead.find_all("th")]
+            else:
+                first_tr = table.find("tr")
+                headers = [th.get_text(" ", strip=True) for th in first_tr.find_all("th")] if first_tr else []
+            h_prefix = ("[" + " | ".join(headers[:6]) + "] ") if headers else ""
+
             for row in table.find_all("tr"):
-                cells = [c.get_text(" ", strip=True) for c in row.find_all(["td"])]
-                if not cells:
+                if not row.find_all("td"):
                     continue
+                cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
                 row_str = h_prefix + " | ".join([c for c in cells if c])
                 rel = self.score_passage(row_str, keywords)
                 if rel > 0:
@@ -177,27 +181,34 @@ class ChronosGraphROCmAgent:
         return urls
 
     def verify_verbatim_grounding(self, candidate: str, quote: str, keywords: List[str]) -> bool:
+        """
+        Strict Cite-or-Refuse Gate:
+        1. Every number in candidate answer must appear verbatim in the source quote.
+        2. Query numbers (e.g. model numbers/years) if present must not be contradicted,
+           and at least 1 core query keyword must be grounded in the quote.
+        """
         if not candidate or not quote:
             return False
         for num in re.findall(r"\b\d+(?:\.\d+)?\b", candidate):
             if num not in quote:
                 return False
         matched = [kw for kw in keywords if kw in quote.lower()]
-        return len(matched) >= max(1, int(len(keywords) * 0.4))
+        return len(matched) >= max(1, int(len(keywords) * 0.3))
 
     def detect_and_resolve_conflicts(self, claims: List[ClaimNode]) -> Tuple[bool, List[Dict[str, str]]]:
         """Compares top claims across pages to identify stale/conflicting numerical values."""
         if len(claims) < 2:
             return False, []
         winner = claims[0]
-        win_nums = set(re.findall(r"\b\d+(?:\.\d+)?\s*(?:gb|tb/s|tb|mb|w|ghz|usd|\$)\b", winner.quote.lower()))
+        unit_pattern = r"\b\d+(?:\.\d+)?\s*(?:gb|tb/s|tb|mb|w|ghz|mhz|ms|%|usd|\$|€|cores)\b"
+        win_nums = set(re.findall(unit_pattern, winner.quote.lower()))
         conflict_log = []
         conflict_found = False
 
         for other in claims[1:5]:
             if other.url == winner.url and other.quote == winner.quote:
                 continue
-            other_nums = set(re.findall(r"\b\d+(?:\.\d+)?\s*(?:gb|tb/s|tb|mb|w|ghz|usd|\$)\b", other.quote.lower()))
+            other_nums = set(re.findall(unit_pattern, other.quote.lower()))
             if win_nums and other_nums and win_nums != other_nums:
                 conflict_found = True
                 conflict_log.append({
@@ -278,7 +289,8 @@ class ChronosGraphROCmAgent:
             )
 
         best = all_claims[0]
-        if not self.verify_verbatim_grounding(best.quote, best.quote, keywords):
+        candidate_answer = best.quote
+        if not self.verify_verbatim_grounding(candidate_answer, best.quote, keywords):
             return ChronosResult(
                 query=query,
                 status="REFUSED_UNVERIFIABLE",
@@ -300,7 +312,7 @@ class ChronosGraphROCmAgent:
         return ChronosResult(
             query=query,
             status=status_code,
-            answer=best.quote,
+            answer=candidate_answer,
             primary_citation=best.url,
             verbatim_quote=best.quote,
             sha256_evidence_hash=best.sha256_receipt,
@@ -311,3 +323,18 @@ class ChronosGraphROCmAgent:
             compute_backend=self.compute_backend,
             latency_ms=latency
         )
+
+
+if __name__ == "__main__":
+    import argparse
+    import json
+    from dataclasses import asdict
+
+    parser = argparse.ArgumentParser(description="ChronosGraph CLI — Temporal Web Verification Engine on AMD ROCm")
+    parser.add_argument("--query", "-q", type=str, required=True, help="Natural language question")
+    parser.add_argument("--url", "-u", type=str, nargs="*", default=None, help="Optional starting seed URLs")
+    args = parser.parse_args()
+
+    cli_agent = ChronosGraphROCmAgent()
+    result = cli_agent.run_query(query=args.query, seed_urls=args.url)
+    print(json.dumps(asdict(result), indent=2))

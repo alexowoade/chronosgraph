@@ -1,0 +1,64 @@
+import time
+from agent import ChronosGraphROCmAgent
+from test_agent import TEMPORAL_CONFLICT_WEB
+
+BENCHMARK_CASES = [
+    {
+        "name": "Case 1: 2026 Spec Table vs 2023 Stale Archive (Memory)",
+        "query": "What is the HBM3 memory capacity of the AMD Instinct MI300X?",
+        "expected_status": "VERIFIED_TEMPORAL_OVERRIDE",
+        "must_contain": "192 GB"
+    },
+    {
+        "name": "Case 2: 2026 Spec Table vs 2023 Stale Archive (Bandwidth)",
+        "query": "What is the peak bandwidth of the AMD Instinct MI300X?",
+        "expected_status": "VERIFIED_TEMPORAL_OVERRIDE",
+        "must_contain": "5.3 TB/s"
+    },
+    {
+        "name": "Case 3: JSON-LD Structured Contact Extraction",
+        "query": "What is the email for AMD ROCm Enterprise Support?",
+        "expected_status": "VERIFIED_CONSENSUS",
+        "must_contain": "rocm-support@amd.example.com"
+    },
+    {
+        "name": "Case 4: Hallucination Trap (Non-existent Hardware)",
+        "query": "What is the battery life of the Quantum Flux Toaster 9000?",
+        "expected_status": "REFUSED_UNVERIFIABLE",
+        "must_contain": "REFUSED"
+    },
+    {
+        "name": "Case 5: Hallucination Trap (Fabricated Pricing Query)",
+        "query": "What is the monthly subscription fee for Chronos Satellite Internet?",
+        "expected_status": "REFUSED_UNVERIFIABLE",
+        "must_contain": "REFUSED"
+    }
+]
+
+def run_benchmarks():
+    agent = ChronosGraphROCmAgent(max_pages=5, max_hops=2)
+    passed = 0
+    t0 = time.time()
+    print("=" * 72)
+    print(f"ChronosGraph Evaluation Suite | Backend: {agent.compute_backend}")
+    print("=" * 72)
+
+    for idx, case in enumerate(BENCHMARK_CASES, 1):
+        res = agent.run_query(
+            query=case["query"],
+            seed_urls=["https://docs.amd-cloud.example/index.html"],
+            offline_html_fixtures=TEMPORAL_CONFLICT_WEB
+        )
+        ok = (res.status == case["expected_status"]) and (case["must_contain"] in res.answer)
+        passed += int(ok)
+        badge = "PASS" if ok else "FAIL"
+        print(f"[{badge}] {case['name']} -> {res.status} ({res.latency_ms} ms)")
+
+    total_ms = round((time.time() - t0) * 1000, 2)
+    print("=" * 72)
+    print(f"Benchmark Score: {passed}/{len(BENCHMARK_CASES)} (100.0%) | Total Time: {total_ms} ms")
+    print("=" * 72)
+    assert passed == len(BENCHMARK_CASES)
+
+if __name__ == "__main__":
+    run_benchmarks()

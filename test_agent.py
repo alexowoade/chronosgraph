@@ -1,4 +1,5 @@
 from agent import ChronosGraphROCmAgent
+from api import health, retrieve, RetrieveRequest
 
 TEMPORAL_CONFLICT_WEB = {
     "https://docs.amd-cloud.example/index.html": """
@@ -7,6 +8,7 @@ TEMPORAL_CONFLICT_WEB = {
             <p>Browse official hardware specifications and historical archives.</p>
             <a href="https://docs.amd-cloud.example/archive-2023-specs.html">Archived 2023 Preview Specs</a>
             <a href="https://docs.amd-cloud.example/current-2026-specs.html">Official 2026 Production Spec Sheet</a>
+            <a href="https://docs.amd-cloud.example/support.html">Enterprise Support & JSON-LD</a>
         </body></html>
     """,
     "https://docs.amd-cloud.example/archive-2023-specs.html": """
@@ -25,11 +27,17 @@ TEMPORAL_CONFLICT_WEB = {
                 <tr><td>AMD Instinct MI300X Production</td><td>192 GB HBM3</td><td>5.3 TB/s</td><td>2026 v2.4</td></tr>
             </table>
         </body></html>
+    """,
+    "https://docs.amd-cloud.example/support.html": """
+        <html><head><title>AMD Support</title>
+        <script type="application/ld+json">
+        {"@type": "Organization", "name": "AMD ROCm Enterprise Support", "email": "rocm-support@amd.example.com"}
+        </script></head>
+        <body><p>Contact our team.</p></body></html>
     """
 }
 
 def test_01_temporal_conflict_override():
-    """Proves ChronosGraph overrides stale 2023 (128 GB) page with 2026 production spec table (192 GB)."""
     agent = ChronosGraphROCmAgent(max_pages=5, max_hops=2)
     res = agent.run_query(
         query="What is the HBM3 memory capacity and bandwidth of the AMD Instinct MI300X?",
@@ -77,3 +85,36 @@ def test_06_page_budget_enforced():
         offline_html_fixtures=TEMPORAL_CONFLICT_WEB
     )
     assert len(res.navigation_trace) == 1
+
+def test_07_json_ld_extraction():
+    agent = ChronosGraphROCmAgent(max_pages=5, max_hops=2)
+    res = agent.run_query(
+        query="What is the email for AMD ROCm Enterprise Support?",
+        seed_urls=["https://docs.amd-cloud.example/index.html"],
+        offline_html_fixtures=TEMPORAL_CONFLICT_WEB
+    )
+    assert res.status.startswith("VERIFIED")
+    assert "rocm-support@amd.example.com" in res.answer
+
+def test_08_row_header_table_extraction():
+    fixtures = {
+        "https://spec.example/row-th.html": """
+        <html><body><table>
+            <tr><th scope="row">Thermal Design Power</th><td>750 W</td></tr>
+        </table></body></html>
+        """
+    }
+    agent = ChronosGraphROCmAgent()
+    res = agent.run_query("What is the Thermal Design Power?", seed_urls=["https://spec.example/row-th.html"], offline_html_fixtures=fixtures)
+    assert res.status.startswith("VERIFIED")
+    assert "750 W" in res.answer
+
+def test_09_broken_url_graceful_handling():
+    agent = ChronosGraphROCmAgent(max_pages=2, max_hops=1)
+    res = agent.run_query("What is the memory capacity?", seed_urls=["https://invalid.domain.example.test/404"])
+    assert res.status == "REFUSED_UNVERIFIABLE"
+
+def test_10_fastapi_health_endpoint():
+    resp = health()
+    assert resp["status"] == "ok"
+    assert "compute_backend" in resp

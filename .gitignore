@@ -1,25 +1,10 @@
 venv/
 __pycache__/
+*.pyc
 .pytest_cache/
 .env
+.DS_Store
 
-# Python virtual environments
-venv/
 venv_backup/
-.venv/
-
-# Python caches and test artifacts
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-
-# Generated code exports
+*.bak
 chronosgraph_review.txt
-chronosgraph_all_code.txt
-
-# Environment secrets
-.env
-.env.*
-!.env.example

@@ -1,41 +1,9 @@
+from pathlib import Path
 from agent import ChronosGraphROCmAgent
-from api import health, retrieve, RetrieveRequest
+from api import health
+from demo_data import TEMPORAL_CONFLICT_WEB
 
-TEMPORAL_CONFLICT_WEB = {
-    "https://docs.amd-cloud.example/index.html": """
-        <html><head><title>AMD Instinct Documentation Portal</title></head>
-        <body>
-            <p>Browse official hardware specifications and historical archives.</p>
-            <a href="https://docs.amd-cloud.example/archive-2023-specs.html">Archived 2023 Preview Specs</a>
-            <a href="https://docs.amd-cloud.example/current-2026-specs.html">Official 2026 Production Spec Sheet</a>
-            <a href="https://docs.amd-cloud.example/support.html">Enterprise Support & JSON-LD</a>
-        </body></html>
-    """,
-    "https://docs.amd-cloud.example/archive-2023-specs.html": """
-        <html><head><title>2023 Early Preview</title>
-        <meta property="article:modified_time" content="2023-06-15" /></head>
-        <body>
-            <p>In the 2023 v1.0 early preview, the accelerator memory capacity was 128 GB HBM3 with 4.0 TB/s bandwidth.</p>
-        </body></html>
-    """,
-    "https://docs.amd-cloud.example/current-2026-specs.html": """
-        <html><head><title>2026 Official Production Specs</title>
-        <meta property="article:modified_time" content="2026-09-01" /></head>
-        <body>
-            <table>
-                <tr><th>Model</th><th>Memory Capacity</th><th>Peak Bandwidth</th><th>Release</th></tr>
-                <tr><td>AMD Instinct MI300X Production</td><td>192 GB HBM3</td><td>5.3 TB/s</td><td>2026 v2.4</td></tr>
-            </table>
-        </body></html>
-    """,
-    "https://docs.amd-cloud.example/support.html": """
-        <html><head><title>AMD Support</title>
-        <script type="application/ld+json">
-        {"@type": "Organization", "name": "AMD ROCm Enterprise Support", "email": "rocm-support@amd.example.com"}
-        </script></head>
-        <body><p>Contact our team.</p></body></html>
-    """
-}
+FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 def test_01_temporal_conflict_override():
     agent = ChronosGraphROCmAgent(max_pages=5, max_hops=2)
@@ -118,3 +86,49 @@ def test_10_fastapi_health_endpoint():
     resp = health()
     assert resp["status"] == "ok"
     assert "compute_backend" in resp
+
+def test_11_fixture_price_conflict_resolution():
+    fixtures = {
+        "https://cloud.example/price-2023.html": (FIXTURE_DIR / "price_stale.html").read_text(),
+        "https://cloud.example/price-2026.html": (FIXTURE_DIR / "price_fresh.html").read_text(),
+    }
+    agent = ChronosGraphROCmAgent()
+    res = agent.run_query("What is the AMD Instinct MI300X hourly rate pricing?", offline_html_fixtures=fixtures)
+    assert res.status == "VERIFIED_TEMPORAL_OVERRIDE"
+    assert "$2.85" in res.answer
+
+def test_12_fixture_event_conflict_resolution():
+    fixtures = {
+        "https://events.example/2024.html": (FIXTURE_DIR / "event_stale.html").read_text(),
+        "https://events.example/2026.html": (FIXTURE_DIR / "event_fresh.html").read_text(),
+    }
+    agent = ChronosGraphROCmAgent()
+    res = agent.run_query("When is the AMD AI Developer Summit keynote date?", offline_html_fixtures=fixtures)
+    assert res.status == "VERIFIED_TEMPORAL_OVERRIDE"
+    assert "2026-12-08" in res.answer
+
+def test_13_stale_table_vs_fresh_body():
+    # NEW — this is the case the old 0.08 freshness boost got wrong:
+    # a 2023 table must NOT beat a 2026 paragraph on the same fact.
+    fixtures = {
+        "https://spec.example/stale-table.html": """
+        <html><head><title>2023 Spec Table</title>
+        <meta property="article:modified_time" content="2023-06-15" /></head>
+        <body><table>
+            <tr><th>Model</th><th>Memory Capacity</th></tr>
+            <tr><td>AMD Instinct MI300X</td><td>128 GB HBM3</td></tr>
+        </table></body></html>
+        """,
+        "https://spec.example/fresh-body.html": """
+        <html><head><title>2026 Spec Notes</title>
+        <meta property="article:modified_time" content="2026-09-01" /></head>
+        <body><p>AMD Instinct MI300X memory capacity is 192 GB HBM3 in the 2026 production specification.</p></body></html>
+        """,
+    }
+    agent = ChronosGraphROCmAgent()
+    res = agent.run_query(
+        "What is the memory capacity of AMD Instinct MI300X?",
+        offline_html_fixtures=fixtures,
+    )
+    assert "192 GB" in res.answer
+    assert res.primary_citation == "https://spec.example/fresh-body.html"

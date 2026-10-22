@@ -6,6 +6,13 @@ from demo_data import TEMPORAL_CONFLICT_WEB
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
+def _load(path):
+    try:
+        return (FIXTURE_DIR / path).read_text()
+    except FileNotFoundError:
+        st.error(f"Missing fixture: {FIXTURE_DIR / path}")
+        st.stop()
+
 st.set_page_config(page_title="ChronosGraph | Temporal Web Verification Engine", page_icon="⏳", layout="wide")
 
 st.title("⏳ ChronosGraph: Temporal Conflict & Stale-Page Web Verification Engine")
@@ -14,7 +21,11 @@ st.markdown(
     "*Cross-Page Claim Graph • Temporal Freshness Resolution (2026 vs Stale Pages) • SHA-256 Evidence Receipts • Cite-or-Refuse Gate*"
 )
 
-agent = ChronosGraphROCmAgent()
+@st.cache_resource
+def get_agent():
+    return ChronosGraphROCmAgent()
+
+agent = get_agent()
 
 c1, c2, c3, c4 = st.columns(4)
 # FIX: the original showed a truncated backend string plus a hardcoded
@@ -45,8 +56,8 @@ elif mode.startswith("2."):
     default_q = "What is the AMD Instinct MI300X on-demand hourly rate pricing?"
     default_urls = "https://cloud.example/price-2023.html\nhttps://cloud.example/price-2026.html"
     fixtures = {
-        "https://cloud.example/price-2023.html": (FIXTURE_DIR / "price_stale.html").read_text(),
-        "https://cloud.example/price-2026.html": (FIXTURE_DIR / "price_fresh.html").read_text(),
+        "https://cloud.example/price-2023.html": _load("price_stale.html"),
+        "https://cloud.example/price-2026.html": _load("price_fresh.html"),
     }
 elif mode.startswith("3."):
     default_q = "What is the battery life of the Quantum Flux Toaster 9000?"
@@ -62,9 +73,12 @@ urls_input = st.text_area("Starting Seed URLs (one per line, or leave blank for 
 if st.button("🚀 Execute ChronosGraph Multi-Hop Retrieval", type="primary", use_container_width=True):
     seed_list = [u.strip() for u in urls_input.splitlines() if u.strip()]
 
-    with st.spinner("Traversing links, extracting temporal metadata, and resolving cross-page conflicts..."):
-        res = agent.run_query(query=query, seed_urls=seed_list, offline_html_fixtures=fixtures)
-
+    try:
+        with st.spinner("Traversing links, extracting temporal metadata, and resolving cross-page conflicts..."):
+            res = agent.run_query(query=query, seed_urls=seed_list, offline_html_fixtures=fixtures)
+    except Exception as e:
+        st.error(f"Agent failed: {type(e).__name__}: {e}")
+        st.stop()
     if res.status.startswith("VERIFIED"):
         st.success(f"✅ **{res.status} ({res.latency_ms} ms):** {res.answer}")
         m1, m2, m3 = st.columns(3)

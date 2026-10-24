@@ -1,6 +1,7 @@
 import re
 from typing import List, Dict, Tuple, Set
 from engine.extract import ClaimNode
+from engine.query import _keyword_matches
 
 UNIT_PATTERN = r"(?:\$\s*\d+(?:\.\d+)?|\b\d+(?:\.\d+)?\s*(?:gb|tb/s|tb|mb|w|ghz|mhz|ms|%|usd|\$|€|cores)\b|\bv\d+\.\d+(?:\.\d+)?\b|\b202\d-\d{2}-\d{2}\b)"
 
@@ -42,7 +43,12 @@ def verify_verbatim_grounding(candidate: str, quote: str, keywords: List[str]) -
     for num in re.findall(r"\d+(?:\.\d+)?", candidate):
         if num not in quote_numbers:
             return False
-    matched = [kw for kw in keywords if kw in quote.lower()]
+    # Synonym-aware, matching score_passage: a keyword counts if it,
+    # or a word in its synonym group, appears in the quote. Without
+    # this, a bare synonym question like "throughput" would pass
+    # scoring (bandwidth in the row) and then fail here, because
+    # "throughput" itself is not in the quote.
+    matched = [kw for kw in keywords if _keyword_matches(kw, quote.lower())]
     return len(matched) >= max(1, int(len(keywords) * 0.3))
 
 def detect_and_resolve_conflicts(claims: List[ClaimNode]) -> Tuple[bool, List[Dict[str, str]]]:

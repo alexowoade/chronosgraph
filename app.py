@@ -85,12 +85,16 @@ if st.button("🚀 Execute ChronosGraph Multi-Hop Retrieval", type="primary", us
         m1.markdown(f"**🔗 Authoritative Citation:**  \n`{res.primary_citation}`")
         m2.markdown(f"**📅 Temporal & Structural Signal:**  \n`{res.freshness_metadata}`")
         m3.markdown(f"**🔐 SHA-256 Evidence Receipt:**  \n`{res.sha256_evidence_hash}`")
+        if res.short_answer:
+            st.markdown(f"**✅ Short Answer:**  \n`{res.short_answer}`")
+        st.markdown(f"**🔗 Citations:**  \n`{res.citations}`")
 
         if res.conflict_detected:
             st.warning("⚡ **CROSS-PAGE TEMPORAL CONFLICT DETECTED & RESOLVED:** Stale data was automatically overridden by a newer primary specification table!")
             st.table(res.conflict_log)
     else:
         st.error(f"🛡 **{res.status} ({res.latency_ms} ms):** {res.answer}")
+        st.markdown(f"**🔗 Citations:**  \n`{res.citations}`")
 
     st.subheader("🧭 Multi-Hop Crawl & Claim Extraction Trace")
     st.table(res.navigation_trace)

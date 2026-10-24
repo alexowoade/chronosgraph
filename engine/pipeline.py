@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass
 from typing import List, Dict, Optional
@@ -5,7 +6,28 @@ from engine.device import detect_rocm_device
 from engine.query import tokenize_query
 from engine.fetch import create_session, keyless_search
 from engine.extract import ClaimNode, parse_page_into_claims
-from engine.conflict import verify_verbatim_grounding, detect_and_resolve_conflicts
+from engine.conflict import verify_verbatim_grounding, detect_and_resolve_conflicts, UNIT_PATTERN
+
+def extract_short_answer(quote: str) -> str:
+    """Short exact answer extracted from the verbatim quote, for
+    display alongside the full quote. It is the unit-bearing values
+    in the quote, in order, deduplicated: "192 GB, 5.3 TB/s, v2.4"
+    or "$2.85, v2.0". It never invents a value, it only copies
+    values already in the quote. For quotes with no unit value
+    (for example a body-text architecture list), it is "" and the
+    display should hide the short-answer line, not invent one.
+    primary_citation is kept unchanged for backward compatibility;
+    citations is the list form: [primary_citation] when verified,
+    [] when refused, so a JSON grader can read citations as a list
+    without breaking the existing string field or its test."""
+    if not quote:
+        return ""
+    seen = []
+    for value in re.findall(UNIT_PATTERN, quote, flags=re.IGNORECASE):
+        value = value.strip()
+        if value and value not in seen:
+            seen.append(value)
+    return ", ".join(seen)
 
 @dataclass
 class ChronosResult:
@@ -21,6 +43,12 @@ class ChronosResult:
     navigation_trace: List[Dict[str, str]]
     compute_backend: str
     latency_ms: float
+    short_answer: str = ""
+    citations: List[str] = None
+
+    def __post_init__(self):
+        if self.citations is None:
+            self.citations = [self.primary_citation] if self.primary_citation else []
 
 class ChronosGraphROCmAgent:
     """
@@ -125,7 +153,9 @@ class ChronosGraphROCmAgent:
                 conflict_log=[],
                 navigation_trace=trace,
                 compute_backend=self.compute_backend,
-                latency_ms=latency
+                latency_ms=latency,
+                short_answer="",
+                citations=[]
             )
 
         best = all_claims[0]
@@ -143,7 +173,9 @@ class ChronosGraphROCmAgent:
                 conflict_log=[],
                 navigation_trace=trace,
                 compute_backend=self.compute_backend,
-                latency_ms=latency
+                latency_ms=latency,
+                short_answer="",
+                citations=[]
             )
 
         has_conflict, conflict_details = detect_and_resolve_conflicts(all_claims)
@@ -162,5 +194,7 @@ class ChronosGraphROCmAgent:
             conflict_log=conflict_details,
             navigation_trace=trace,
             compute_backend=self.compute_backend,
-            latency_ms=latency
+            latency_ms=latency,
+            short_answer=extract_short_answer(best.quote),
+            citations=[best.url]
         )
